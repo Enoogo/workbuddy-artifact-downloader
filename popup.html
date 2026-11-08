@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>WorkBuddy 产物下载器</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="title-wrap">
+        <div class="title">WorkBuddy 产物下载器</div>
+        <div class="version">v2.1 · 并发 / 单位 / 勾选下载</div>
+      </div>
+      <div class="header-actions">
+        <button id="refresh" class="link-btn" title="重新扫描产物">刷新</button>
+        <button id="toggle-log" class="link-btn" title="展开或收起任务日志">日志</button>
+        <button id="btn-settings" class="link-btn" title="打开设置">设置</button>
+      </div>
+    </header>
+
+    <section id="status" class="status">正在扫描产物…</section>
+
+    <section id="summary" class="summary" hidden>
+      <div class="summary-line">
+        <span id="task-name" class="task-name"></span>
+      </div>
+      <div class="summary-line muted">
+        <span id="file-count"></span>
+        <span class="dot">·</span>
+        <span id="total-size"></span>
+      </div>
+    </section>
+
+    <section id="job-card" class="job-card" hidden>
+      <div class="job-head">
+        <span id="job-phase" class="job-phase">准备中</span>
+        <span id="job-percent" class="job-percent">0%</span>
+      </div>
+      <div class="progress-bar"><div id="job-fill" class="progress-fill"></div></div>
+      <div id="job-main" class="job-main"></div>
+      <div id="job-sub" class="job-sub"></div>
+      <div id="job-current" class="job-current"></div>
+      <div id="job-active" class="job-active" hidden></div>
+      <div class="job-actions">
+        <button id="btn-cancel" class="btn small danger" hidden>取消任务</button>
+        <button id="btn-open-folder" class="btn small" hidden>打开下载文件夹</button>
+        <button id="btn-clear-job" class="btn small" hidden>清除记录</button>
+      </div>
+    </section>
+
+    <section id="file-area" hidden>
+      <div class="file-toolbar">
+        <label class="check-all">
+          <input type="checkbox" id="check-all" checked />
+          <span>全选</span>
+        </label>
+        <span id="selected-count" class="selected-count">已选 0 / 0</span>
+        <button id="btn-select-none" class="link-btn" type="button" title="取消勾选全部文件">全不选</button>
+      </div>
+      <ul id="file-list" class="file-list"></ul>
+      <div class="file-tip">双击某个文件可单独下载它</div>
+    </section>
+
+    <section id="actions" class="actions" hidden>
+      <button id="btn-each" class="btn primary">逐个下载（推荐，保留目录）</button>
+      <button id="btn-zip" class="btn">打包为 ZIP（大任务占内存）</button>
+      <div id="mode-hint" class="hint"></div>
+    </section>
+
+    <section id="log-panel" class="log-panel" hidden>
+      <div class="log-head">
+        <span class="log-title">任务日志</span>
+        <select id="log-filter" class="log-filter" title="筛选日志级别">
+          <option value="all">全部</option>
+          <option value="info">信息</option>
+          <option value="warn">警告</option>
+          <option value="error">错误</option>
+        </select>
+        <button id="log-copy" class="link-btn">复制</button>
+        <button id="log-window" class="link-btn">独立窗口</button>
+        <button id="log-close" class="link-btn">收起</button>
+      </div>
+      <div id="log-list" class="log-list"></div>
+    </section>
+
+    <section id="result" class="result" hidden></section>
+
+    <footer class="footer">
+      下载时自动隐藏浏览器下载气泡与动画，并在完成后清除本扩展的下载记录；任务与日志会持久保存，关闭弹窗不会中断下载。
+    </footer>
+
+    <script src="settings.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

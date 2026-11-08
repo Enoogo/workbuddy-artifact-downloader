@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WorkBuddy 产物下载器 · 任务日志</title>
+    <link rel="stylesheet" href="logs.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <div class="title-wrap">
+        <h1>WorkBuddy 产物下载器 · 任务日志</h1>
+        <div id="subtitle" class="subtitle">正在读取任务…</div>
+      </div>
+      <div class="actions">
+        <select id="filter" class="filter" title="按日志级别筛选">
+          <option value="all">全部</option>
+          <option value="info">信息</option>
+          <option value="warn">警告</option>
+          <option value="error">错误</option>
+        </select>
+        <button id="copy" class="btn">复制日志</button>
+        <button id="refresh" class="btn">刷新</button>
+      </div>
+    </header>
+
+    <main class="page-main">
+      <section id="summary" class="summary-card" hidden></section>
+      <section class="log-card">
+        <div id="log-list" class="log-list">
+          <div class="log-empty">正在读取任务日志…</div>
+        </div>
+      </section>
+    </main>
+
+    <script src="settings.js"></script>
+    <script src="logs.js"></script>
+  </body>
+</html>

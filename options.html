@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WorkBuddy 产物下载器 · 设置</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="page-head">
+        <div>
+          <h1>WorkBuddy 产物下载器 · 设置</h1>
+          <p class="sub">修改后自动保存并立即生效；正在运行的任务会在下一个文件上使用新的并发与显示设置。</p>
+        </div>
+        <a class="ghost-btn" href="logs.html" target="_blank" rel="noreferrer">打开日志窗口</a>
+      </header>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>下载</h2>
+          <span class="badge">默认 3</span>
+        </div>
+
+        <div class="row">
+          <div class="row-main">
+            <div class="label">并发下载数量</div>
+            <div class="desc">
+              同时下载的文件个数，可自由输入 1–64。数值越大整体越快，但更容易被服务器限速或占用更多内存。
+            </div>
+          </div>
+          <div class="row-ctrl">
+            <input id="concurrency" class="num" type="number" min="1" max="64" step="1" inputmode="numeric" />
+            <div class="chips">
+              <button type="button" class="chip" data-conc="1">1</button>
+              <button type="button" class="chip" data-conc="2">2</button>
+              <button type="button" class="chip" data-conc="3">3</button>
+              <button type="button" class="chip" data-conc="5">5</button>
+              <button type="button" class="chip" data-conc="8">8</button>
+              <button type="button" class="chip" data-conc="10">10</button>
+            </div>
+          </div>
+        </div>
+
+        <label class="switch-row">
+          <span class="switch-main">
+            <span class="label">隐藏下载气泡与下载动画</span>
+            <span class="desc">
+              下载时不弹出 Chrome 下载提醒，也不显示工具栏下载动画。任务结束后自动恢复。
+            </span>
+          </span>
+          <input type="checkbox" id="hideDownloadUi" />
+          <span class="switch"></span>
+        </label>
+
+        <label class="switch-row">
+          <span class="switch-main">
+            <span class="label">下载完成后清除下载记录</span>
+            <span class="desc">
+              只清除本扩展产生的下载条目，不会动你之前的历史记录，下载好的文件仍然保留。
+            </span>
+          </span>
+          <input type="checkbox" id="clearDownloadHistory" />
+          <span class="switch"></span>
+        </label>
+
+        <label class="switch-row">
+          <span class="switch-main">
+            <span class="label">自动修正被改写的扩展名</span>
+            <span class="desc">
+              Chrome 会按服务器 MIME 改写扩展名（例如 .apkg 变成 .zip）。开启后会保证保存为真实扩展名。
+            </span>
+          </span>
+          <input type="checkbox" id="fixFileExtension" />
+          <span class="switch"></span>
+        </label>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>进度、速度与剩余时间</h2>
+          <span class="badge">可分别设置</span>
+        </div>
+        <p class="card-desc">
+          三项互相独立：可以「进度按文件个数、速度按流量、剩余时间按文件个数」这样混搭。默认全部按文件体积（下载量）。
+        </p>
+
+        <div class="row">
+          <div class="row-main">
+            <div class="label">进度条依据</div>
+            <div class="desc">百分比按已下载字节数计算，还是按已完成文件个数计算。</div>
+          </div>
+          <div class="row-ctrl">
+            <select id="progressMetric" class="select">
+              <option value="bytes">按文件体积（字节）</option>
+              <option value="files">按文件个数</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="row-main">
+            <div class="label">下载速度单位</div>
+            <div class="desc">显示为「12.3 MB/s」，还是「1.25 个/s」（支持小数）。</div>
+          </div>
+          <div class="row-ctrl">
+            <select id="speedMetric" class="select">
+              <option value="bytes">文件体积 / 秒</option>
+              <option value="files">文件个数 / 秒</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="row-main">
+            <div class="label">剩余时间估算依据</div>
+            <div class="desc">按剩余体积 ÷ 流量速度，还是按剩余文件数 ÷ 每秒文件数。</div>
+          </div>
+          <div class="row-ctrl">
+            <select id="etaMetric" class="select">
+              <option value="bytes">按下载流量</option>
+              <option value="files">按文件个数</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="preview" id="preview">
+          <div class="preview-title">效果预览</div>
+          <div class="preview-line"><span>进度</span><b id="preview-progress">—</b></div>
+          <div class="preview-line"><span>速度</span><b id="preview-speed">—</b></div>
+          <div class="preview-line"><span>剩余</span><b id="preview-eta">—</b></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>日志</h2></div>
+        <label class="switch-row">
+          <span class="switch-main">
+            <span class="label">日志面板默认展开</span>
+            <span class="desc">打开下载器弹窗时直接显示任务日志；关闭后默认收起，点「日志」再展开。</span>
+          </span>
+          <input type="checkbox" id="logDefaultOpen" />
+          <span class="switch"></span>
+        </label>
+      </section>
+
+      <footer class="page-foot">
+        <button id="reset" class="ghost-btn">恢复默认设置</button>
+        <span id="saved" class="saved"></span>
+      </footer>
+    </div>
+
+    <script src="settings.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "WorkBuddy 产物下载器",
+  "version": "2.1.0",
+  "description": "一键下载 WorkBuddy 对话中的所有产物：可勾选、可调并发、双击单独下载、支持超大文件与 ZIP 打包，带字节/文件双口径进度、速度、剩余时间与任务日志。",
+  "minimum_chrome_version": "117",
+  "permissions": [
+    "downloads",
+    "storage",
+    "alarms",
+    "activeTab",
+    "scripting",
+    "declarativeNetRequest"
+  ],
+  "host_permissions": [
+    "https://www.workbuddy.cn/*",
+    "https://*.workbuddy.agentos-worker.net/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "WorkBuddy 产物下载器"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.workbuddy.cn/*"],
+      "js": ["zip.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
