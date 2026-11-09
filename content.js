@@ -494,35 +494,13 @@
   }
 
   /* ============================================================
-   * 扩展名兜底：用页面直存保存单个文件
+   * 扩展名保持 / 单文件兜底已移到 offscreen.js
    *
-   * Chrome 的 chrome.downloads 会按服务器 Content-Type 强制改写扩展名
-   * （例：.apkg 返回 application/zip → 落盘变成 .zip）。
-   * 这里用 fetch 自己取回字节、包成 application/octet-stream 的 Blob，
-   * 再用 <a download> 保存，文件名与扩展名完全由我们决定。
+   * 原因：页面里的 <a download> 只能提供纯文件名，无法指定下载子目录，
+   * 会把修正后的文件存到「下载」根目录，造成「建了文件夹却下到外面」。
+   * 现在由 offscreen 文档 fetch + URL.createObjectURL，
+   * 后台用 chrome.downloads.download({ filename: '任务目录/...' }) 保存。
    * ========================================================== */
-  function sanitizeDownloadName(name) {
-    return (
-      String(name || 'file')
-        .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_')
-        .replace(/^\.+/, '_')
-        .slice(0, 150) || 'file'
-    );
-  }
-
-  async function saveBlobDirect(msg) {
-    const name = sanitizeDownloadName(msg.filename);
-    const res = await fetchFileStream(msg.base, msg.token, msg.path, { inactivityMs: 300000 });
-    const blob = new Blob([res.data], { type: 'application/octet-stream' });
-    let url = '';
-    try {
-      url = triggerAnchorDownload(blob, name);
-    } finally {
-      // 尽早释放页面侧的大缓冲
-      res.data = null;
-    }
-    return { ok: true, filename: name, size: res.size, url };
-  }
 
   async function runZipJob(job, state) {
     const files = job.files || [];
@@ -759,16 +737,10 @@
         return;
       }
 
-      case 'WBDA2_SAVE_BLOB':
-        saveBlobDirect(msg)
-          .then(sendResponse)
-          .catch((e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
-        return true;
-
       default:
         return;
     }
   });
 
-  console.info('[WBDA] WorkBuddy 产物下载器 v2.1 内容脚本已就绪');
+  console.info('[WBDA] WorkBuddy 产物下载器 v2.2 内容脚本已就绪');
 })();

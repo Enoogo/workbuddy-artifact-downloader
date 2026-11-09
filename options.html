@@ -68,7 +68,7 @@
           <span class="switch-main">
             <span class="label">自动修正被改写的扩展名</span>
             <span class="desc">
-              Chrome 会按服务器 MIME 改写扩展名（例如 .apkg 变成 .zip）。开启后会保证保存为真实扩展名。
+              Chrome 会按服务器 MIME 改写扩展名（例如 .apkg 变成 .zip）。.apkg / .colpkg 始终用扩展内 Blob 方式保存为真实后缀；开启此项后，其他被改写的类型也会自动修正。两者都会保留原任务子目录。
             </span>
           </span>
           <input type="checkbox" id="fixFileExtension" />

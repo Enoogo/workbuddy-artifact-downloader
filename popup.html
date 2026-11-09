@@ -9,7 +9,7 @@
     <header class="header">
       <div class="title-wrap">
         <div class="title">WorkBuddy 产物下载器</div>
-        <div class="version">v2.1 · 并发 / 单位 / 勾选下载</div>
+        <div class="version">v2.2 · 搜索 / 勾选 / 保持原后缀</div>
       </div>
       <div class="header-actions">
         <button id="refresh" class="link-btn" title="重新扫描产物">刷新</button>
@@ -17,6 +17,18 @@
         <button id="btn-settings" class="link-btn" title="打开设置">设置</button>
       </div>
     </header>
+
+    <div class="search-bar">
+      <input
+        id="file-search"
+        class="search-input"
+        type="search"
+        placeholder="搜索产物：文件名 / 路径"
+        autocomplete="off"
+        disabled
+      />
+      <button id="file-search-clear" class="search-clear" type="button" title="清除搜索" hidden>清除</button>
+    </div>
 
     <section id="status" class="status">正在扫描产物…</section>
 
@@ -55,10 +67,9 @@
           <span>全选</span>
         </label>
         <span id="selected-count" class="selected-count">已选 0 / 0</span>
-        <button id="btn-select-none" class="link-btn" type="button" title="取消勾选全部文件">全不选</button>
       </div>
       <ul id="file-list" class="file-list"></ul>
-      <div class="file-tip">双击某个文件可单独下载它</div>
+      <div class="file-tip">双击单独下载；搜索时勾选与下载只作用于搜索结果</div>
     </section>
 
     <section id="actions" class="actions" hidden>

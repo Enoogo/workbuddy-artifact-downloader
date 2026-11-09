@@ -1,5 +1,5 @@
 /* ============================================================
- * WorkBuddy 产物下载器 — 设置页 (options.js) v2.1
+ * WorkBuddy 产物下载器 — 设置页 (options.js) v2.2
  * 修改即保存（chrome.storage.local），所有页面实时生效。
  * ============================================================ */
 const $ = (id) => document.getElementById(id);

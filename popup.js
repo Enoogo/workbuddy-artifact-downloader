@@ -1,7 +1,10 @@
 /* ============================================================
- * WorkBuddy 产物下载器 — 弹窗逻辑 (popup.js) v2.1
+ * WorkBuddy 产物下载器 — 弹窗逻辑 (popup.js) v2.2
  *
- * v2.1：
+ * v2.2：
+ *   - 顶部新增产物搜索：按文件名 / 路径过滤；
+ *     搜索状态下「全选」和下载都只作用于当前筛选结果；
+ *   - 移除「全不选」按钮：取消勾选「全选」即可；
  *   - 文件列表带勾选框（默认全选），只下载勾选的文件；
  *   - 双击文件行单独下载该文件；
  *   - 活跃下载显示全部并发文件；
@@ -20,6 +23,9 @@ let logRenderTimer = null;
 let lastRunning = null;
 const selected = new Set();
 const liByRel = new Map();
+let searchQuery = '';
+let searchTimer = null;
+const MAX_RENDER_FILES = 600;
 
 const SOURCE_LABEL = {
   react: '底层数据直读',
@@ -48,6 +54,32 @@ function escapeHtml(s) {
     '"': '&quot;',
     "'": '&#39;',
   }[c]));
+}
+
+function fileMatches(f, q) {
+  if (!q) return true;
+  const hay = (String(f.rel || '') + '\n' + String(f.name || '')).toLowerCase();
+  return hay.indexOf(q) >= 0;
+}
+
+function sourceFiles() {
+  if (payload) return payload.files || [];
+  if (currentJob && Array.isArray(currentJob.files)) return currentJob.files;
+  return [];
+}
+
+function visibleFiles() {
+  const files = sourceFiles();
+  if (!searchQuery) return files;
+  return files.filter((f) => fileMatches(f, searchQuery));
+}
+
+function syncSearchUi() {
+  const input = $('file-search');
+  if (!input) return;
+  input.disabled = !payload || !(payload.files && payload.files.length);
+  input.value = input.value || '';
+  $('file-search-clear').hidden = !input.value;
 }
 
 function setStatus(text, isError) {
@@ -170,6 +202,7 @@ async function scan() {
   selected.clear();
   for (const f of payload.files || []) selected.add(f.rel);
 
+  syncSearchUi();
   renderSummary();
   renderFileList(payload.files);
   updateSelectionUi();
@@ -221,14 +254,36 @@ function statusText(f, mode) {
   return f.status || '—';
 }
 
+function jobFileFor(f, jobMap) {
+  if (!jobMap) return f;
+  const jf = jobMap.get(f.rel);
+  if (!jf) return f;
+  return Object.assign({}, f, {
+    status: jf.status,
+    bytes: jf.bytes,
+    error: jf.error,
+    size: Number.isFinite(jf.size) && jf.size > 0 ? jf.size : f.size,
+  });
+}
+
 function renderFileList(files) {
   const ul = $('file-list');
   const frag = document.createDocumentFragment();
   const running = !!(currentJob && currentJob.status === 'running');
+  const all = files || [];
+  const matched = all.filter((f) => fileMatches(f, searchQuery));
+  const shown = matched.slice(0, MAX_RENDER_FILES);
+  const jobMap =
+    currentJob && Array.isArray(currentJob.files)
+      ? new Map(currentJob.files.map((x) => [x.rel, x]))
+      : null;
 
-  (files || []).forEach((f, i) => {
+  liByRel.clear();
+
+  shown.forEach((raw, i) => {
+    const f = jobFileFor(raw, jobMap);
     const li = document.createElement('li');
-    li.className = 'file-item';
+    li.className = 'file-item' + (currentJob && f.status ? ' status-' + f.status : '');
     li.dataset.rel = f.rel || '';
     li.dataset.index = String(f.index == null ? i : f.index);
     li.title = '双击单独下载此文件';
@@ -253,13 +308,34 @@ function renderFileList(files) {
     const st = document.createElement('span');
     st.className = 'file-status';
     st.textContent = statusText(f, currentJob && currentJob.mode);
+    st.title = f.error || '';
 
     li.append(cb, name, size, st);
     frag.appendChild(li);
     liByRel.set(li.dataset.rel, li);
   });
+
+  if (shown.length === 0 && all.length > 0) {
+    const empty = document.createElement('li');
+    empty.className = 'file-empty';
+    empty.textContent = '没有匹配的产物，试试其他关键词或点「清除」';
+    frag.appendChild(empty);
+  }
+
+  if (matched.length > shown.length) {
+    const more = document.createElement('li');
+    more.className = 'file-empty';
+    more.textContent =
+      (searchQuery ? '匹配 ' : '共 ') +
+      matched.length +
+      ' 条，列表仅显示前 ' +
+      MAX_RENDER_FILES +
+      ' 条，请用上方搜索缩小范围';
+    frag.appendChild(more);
+  }
+
   ul.replaceChildren(frag);
-  $('file-area').hidden = !files || files.length === 0;
+  $('file-area').hidden = all.length === 0;
 }
 
 function updateFileStatuses(jobFiles) {
@@ -297,22 +373,22 @@ function updateModeHint() {
 /* ------------------------------------------------------------
  * 勾选
  * ---------------------------------------------------------- */
-function totalFileCount() {
-  if (payload) return (payload.files || []).length;
-  return $('file-list').children.length;
-}
-
 function updateSelectionUi() {
-  const total = totalFileCount();
-  const n = selected.size;
-  $('selected-count').textContent = '已选 ' + n + ' / ' + total;
+  const allFiles = sourceFiles();
+  const visible = searchQuery ? allFiles.filter((f) => fileMatches(f, searchQuery)) : allFiles;
+  const selectedAll = allFiles.filter((f) => selected.has(f.rel)).length;
+  const selectedVisible = visible.filter((f) => selected.has(f.rel)).length;
+
+  $('selected-count').textContent = searchQuery
+    ? '已选 ' + selectedVisible + ' / 筛出 ' + visible.length + '（共 ' + allFiles.length + '）'
+    : '已选 ' + selectedAll + ' / ' + allFiles.length;
 
   const all = $('check-all');
-  all.checked = total > 0 && n === total;
-  all.indeterminate = n > 0 && n < total;
+  all.checked = visible.length > 0 && selectedVisible === visible.length;
+  all.indeterminate = selectedVisible > 0 && !all.checked;
 
   const running = !!(currentJob && currentJob.status === 'running');
-  all.disabled = total === 0 || running;
+  all.disabled = visible.length === 0 || running;
 
   for (const [rel, li] of liByRel) {
     const cb = li.querySelector('input.file-check');
@@ -340,9 +416,11 @@ function setRelSelected(rel, on) {
 }
 
 function setAllSelected(on) {
-  selected.clear();
-  const files = payload ? payload.files || [] : [];
-  if (on) for (const f of files) selected.add(f.rel);
+  const files = searchQuery ? visibleFiles() : sourceFiles();
+  for (const f of files) {
+    if (on) selected.add(f.rel);
+    else selected.delete(f.rel);
+  }
   updateSelectionUi();
 }
 
@@ -541,7 +619,7 @@ function renderResult(job) {
 
 function updateButtons() {
   const running = !!(currentJob && currentJob.status === 'running');
-  const n = selected.size;
+  const n = selectedFiles().length;
   $('btn-each').disabled = !payload || running || n === 0;
   $('btn-zip').disabled = !payload || running || n === 0;
   $('actions').hidden = !payload || running;
@@ -597,7 +675,28 @@ function setDownloadBusy(v) {
 
 function selectedFiles() {
   if (!payload) return [];
-  return (payload.files || []).filter((f) => selected.has(f.rel));
+  const files = searchQuery ? visibleFiles() : payload.files || [];
+  return files.filter((f) => selected.has(f.rel));
+}
+
+function applySearch() {
+  if (searchTimer) {
+    clearTimeout(searchTimer);
+    searchTimer = null;
+  }
+  const input = $('file-search');
+  searchQuery = String(input.value || '').trim().toLowerCase();
+  $('file-search-clear').hidden = !input.value;
+  renderFileList(sourceFiles());
+  updateSelectionUi();
+}
+
+function scheduleSearch() {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchTimer = null;
+    applySearch();
+  }, 120);
 }
 
 async function startDownload(mode) {
@@ -834,7 +933,14 @@ function bindEvents() {
   $('log-filter').addEventListener('change', () => renderLogs(true));
 
   $('check-all').addEventListener('change', (e) => setAllSelected(!!e.target.checked));
-  $('btn-select-none').addEventListener('click', () => setAllSelected(false));
+
+  $('file-search').addEventListener('input', scheduleSearch);
+  $('file-search').addEventListener('search', applySearch);
+  $('file-search-clear').addEventListener('click', () => {
+    $('file-search').value = '';
+    applySearch();
+    $('file-search').focus();
+  });
 
   $('file-list').addEventListener('click', (e) => {
     const li = e.target.closest('li.file-item');

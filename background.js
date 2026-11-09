@@ -1,16 +1,17 @@
 /* ============================================================
- * WorkBuddy 产物下载器 — 后台服务 (background.js) v2.1
+ * WorkBuddy 产物下载器 — 后台服务 (background.js) v2.2
  *
- * v2.1 新增：
- *   - 并发数可配置（settings.concurrency，默认 3）；
- *   - 下载时隐藏 Chrome 下载气泡 / 下载动画（downloads.setUiOptions）；
- *   - 下载完成即清除本扩展产生的下载记录（downloads.erase），保留历史记录；
- *   - 强制保留真实扩展名：DNR 中和 MIME + onDeterminingFilename + 页面直存兜底，
- *     避免 .apkg 被 Chrome 按 application/zip 改写成 .zip；
- *   - 活跃下载列表返回全部并发文件（不再只取 1~5 个）；
- *   - 同时计算「字节口径」与「文件个数口径」的进度、速度、剩余时间；
- *   - 支持双击单文件下载（WBDA2_DOWNLOAD_ONE）；
- *   - 只下载弹窗里勾选的文件。
+ * v2.2 新增 / 修复：
+ *   - .apkg 等 ZIP 容器改走 offscreen Blob 中继：自己取回字节并包成
+ *     application/octet-stream 的 Blob，再交给 chrome.downloads 保存。
+ *     Chrome 不会再按服务器的 application/zip 把 .apkg 改写成 .zip；
+ *     filename 仍带完整子目录，所以文件会落在系统下载目录的任务文件夹内。
+ *   - 被 Chrome 改写扩展名的兜底也从「页面 <a download> 存到下载根目录」
+ *     改为同样的 Blob 中继（保留原目录），修复「建了文件夹却下到外面」。
+ *   - 删除上一版无效的 DNR / onDeterminingFilename 依赖：
+ *     Chrome 的下载目标判定在 API 层就会按 MIME 改写扩展名，改响应头不可靠。
+ *   - 弹窗新增产物搜索；搜索状态下勾选/下载只作用于当前筛选结果。
+ *   - 移除「全不选」按钮，取消勾选「全选」即可实现全不选。
  * ============================================================ */
 
 importScripts('settings.js');
@@ -23,7 +24,12 @@ const PERSIST_DEBOUNCE_MS = 900;
 const STALL_MS = 180000; // 单个文件 180 秒没有任何新字节 → 判定卡死并重试
 const ZIP_WATCHDOG_MS = 180000;
 const MAX_RETRIES = 2;
-const MIME_RULE_ID = 9101;
+
+/**
+ * 这些扩展名本质是 ZIP，服务器很可能返回 application/zip。
+ * Chrome 会因此把落盘文件名强制改成 .zip，所以直接走 Blob 中继。
+ */
+const BLOB_ROUTE_EXTENSIONS = new Set(['.apkg', '.colpkg']);
 
 let settings = Object.assign({}, WBDA.DEFAULTS);
 let job = null;
@@ -41,6 +47,10 @@ let settingsPromise = null;
 const waiters = new Map();
 /** url -> { filename, at }，供 onDeterminingFilename 强制文件名 */
 const pendingNames = new Map();
+/** requestId -> { j, f }，offscreen 读取 Blob 的实时进度 */
+const blobTransfers = new Map();
+/** 延迟关闭 offscreen，避免任务刚结束又立刻开始新任务时反复创建 */
+let closeOffscreenTimer = null;
 
 /* ------------------------------------------------------------
  * 基础工具
@@ -100,10 +110,6 @@ function extOf(p) {
   const b = basename(p);
   const i = b.lastIndexOf('.');
   return i > 0 ? b.slice(i).toLowerCase() : '';
-}
-
-function safeBaseName(p) {
-  return sanitizeSegment(basename(p));
 }
 
 function buildDirName(taskName, taskId) {
@@ -244,44 +250,124 @@ async function eraseByUrl(url) {
 }
 
 /* ------------------------------------------------------------
- * MIME 中和规则：避免 Chrome 按服务器 Content-Type 改写扩展名
- * （.apkg 被 application/zip 改成 .zip 的根因）
+ * offscreen Blob 中继：绕开 Chrome 按 MIME 强制改写扩展名
+ *
+ * 背景（详细排查记录见 HANDOVER.md）：
+ *   - chrome.downloads.download({ filename: 'x.apkg' }) 仍会被 Chrome 按
+ *     服务器的 Content-Type: application/zip 改写为 x.zip；
+ *   - webRequest / DNR 修改响应头、onDeterminingFilename 都不能可靠阻止；
+ *   - 可靠做法：自己取回字节，包成 application/octet-stream 的 Blob，
+ *     再让 chrome.downloads 下载这个 blob URL（StackOverflow 63045043）。
+ *
+ * MV3 service worker 没有 URL.createObjectURL；offscreen 文档有 DOM，
+ * 但只支持 runtime API，所以：offscreen 负责 fetch + createObjectURL，
+ * 后台负责 chrome.downloads.download（filename 可带完整子目录）。
  * ---------------------------------------------------------- */
-async function ensureMimeRule() {
-  const dnr = chrome.declarativeNetRequest;
-  if (!dnr || !dnr.updateSessionRules) return;
+const OFFSCREEN_PATH = 'offscreen.html';
+let offscreenCreating = null;
+
+async function hasOffscreenDocument() {
   try {
-    const existing = dnr.getSessionRules ? await dnr.getSessionRules() : [];
-    if (Array.isArray(existing) && existing.some((r) => r && r.id === MIME_RULE_ID)) return;
+    if (chrome.runtime.getContexts) {
+      const contexts = await chrome.runtime.getContexts({
+        contextTypes: ['OFFSCREEN_DOCUMENT'],
+        documentUrls: [chrome.runtime.getURL(OFFSCREEN_PATH)],
+      });
+      return !!(contexts && contexts.length);
+    }
   } catch (e) {
     /* ignore */
   }
+  return false;
+}
 
-  const baseCondition = { urlFilter: '||workbuddy.agentos-worker.net/files' };
-  const action = {
-    type: 'modifyHeaders',
-    responseHeaders: [
-      { header: 'content-type', operation: 'set', value: 'application/octet-stream' },
-      { header: 'content-disposition', operation: 'remove' },
-    ],
-  };
-
-  const variants = [
-    // 只命中带 X-Access-Token 的请求（即本扩展的下载/读取），不影响页面预览
-    Object.assign({}, baseCondition, { requestHeaders: [{ header: 'x-access-token' }] }),
-    Object.assign({}, baseCondition, { resourceTypes: ['other'] }),
-  ];
-
-  for (const condition of variants) {
-    try {
-      await dnr.updateSessionRules({
-        removeRuleIds: [MIME_RULE_ID],
-        addRules: [{ id: MIME_RULE_ID, priority: 1, action, condition }],
+async function ensureOffscreenDocument() {
+  if (await hasOffscreenDocument()) return;
+  if (!offscreenCreating) {
+    offscreenCreating = chrome.offscreen
+      .createDocument({
+        url: OFFSCREEN_PATH,
+        reasons: ['BLOBS'],
+        justification:
+          'Fetch WorkBuddy artifacts into Blob URLs so Chrome keeps the real extension and the target subfolder.',
+      })
+      .finally(() => {
+        offscreenCreating = null;
       });
-      return;
+  }
+  await offscreenCreating;
+}
+
+async function closeOffscreenDocument() {
+  try {
+    if (await hasOffscreenDocument()) await chrome.offscreen.closeDocument();
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+function scheduleCloseOffscreen() {
+  if (closeOffscreenTimer) clearTimeout(closeOffscreenTimer);
+  closeOffscreenTimer = setTimeout(() => {
+    closeOffscreenTimer = null;
+    if (!job || job.status !== 'running') closeOffscreenDocument().catch(() => {});
+  }, 60000);
+}
+
+function cancelCloseOffscreen() {
+  if (closeOffscreenTimer) {
+    clearTimeout(closeOffscreenTimer);
+    closeOffscreenTimer = null;
+  }
+}
+
+function sendToOffscreen(message) {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage(message, (resp) => {
+        const err = chrome.runtime.lastError;
+        if (err) reject(new Error(err.message));
+        else resolve(resp);
+      });
     } catch (e) {
-      /* 尝试下一种写法 */
+      reject(e);
     }
+  });
+}
+
+async function requestOffscreenBlob(j, f, requestId) {
+  await ensureOffscreenDocument();
+  let lastError = null;
+  for (let i = 0; i < 20; i++) {
+    let resp = null;
+    try {
+      resp = await sendToOffscreen({
+        target: 'offscreen',
+        type: 'WBDA2_FETCH_BLOB',
+        requestId,
+        base: j.base,
+        token: j.token,
+        path: f.path,
+      });
+    } catch (e) {
+      // 只对「消息通道还没就绪」重试；fetch 本身的错误下面直接抛出。
+      lastError = e;
+      resp = null;
+    }
+    if (resp && resp.ok && resp.url) return resp;
+    if (resp && resp.error) throw new Error(resp.error);
+    if (resp) throw new Error('offscreen 未返回 Blob URL');
+    await sleep(150);
+  }
+  throw lastError || new Error('offscreen Blob 中继不可用');
+}
+
+async function revokeOffscreenBlob(url) {
+  if (!url) return;
+  try {
+    await sendToOffscreen({ target: 'offscreen', type: 'WBDA2_REVOKE_BLOB', url });
+  } catch (e) {
+    /* offscreen 可能已关闭，URL 会随文档销毁自动失效 */
   }
 }
 
@@ -576,6 +662,71 @@ async function startChromeDownload(j, f, filename) {
   }
 }
 
+function shouldPreferBlobDownload(f) {
+  // .apkg / .colpkg 是用户明确要求保持后缀的类型，始终走 Blob 中继；
+  // settings.fixFileExtension 只控制“其他类型被改写后的兜底修正”。
+  return BLOB_ROUTE_EXTENSIONS.has(extOf(f.rel));
+}
+
+/**
+ * 走 offscreen Blob 中继下载。filename 仍然是完整相对路径，
+ * 因此 Chrome 会把文件放进任务子目录，而不是下载根目录。
+ */
+async function startBlobDownload(j, f, filename, reason) {
+  const requestId =
+    'blob-' +
+    j.id +
+    '-' +
+    f.index +
+    '-' +
+    (f.attempts || 1) +
+    '-' +
+    Math.random().toString(36).slice(2, 8);
+  blobTransfers.set(requestId, { j, f });
+  let resp;
+  try {
+    resp = await requestOffscreenBlob(j, f, requestId);
+  } finally {
+    blobTransfers.delete(requestId);
+  }
+
+  if (!resp || !resp.ok || !resp.url) {
+    throw new Error((resp && resp.error) || '读取文件到 Blob 失败');
+  }
+
+  f.bytes = Math.max(f.bytes || 0, Number(resp.size) || 0);
+  if (Number(resp.size) > 0) f.size = f.size || Number(resp.size);
+
+  jobLog(
+    j,
+    'info',
+    `[${f.index + 1}/${j.totalFiles}] 已读取 ${f.rel} (${fmtBytes(resp.size)})，正在保存` +
+      (reason === 'extension-fix' ? '（修正扩展名）' : '')
+  );
+
+  rememberName(resp.url, filename);
+  f.blobUrl = resp.url;
+  try {
+    return await chrome.downloads.download({
+      url: resp.url,
+      filename,
+      conflictAction: 'uniquify',
+      saveAs: false,
+    });
+  } catch (e) {
+    await revokeFileBlob(f);
+    throw e;
+  }
+}
+
+async function revokeFileBlob(f) {
+  if (!f || !f.blobUrl) return;
+  const url = f.blobUrl;
+  f.blobUrl = null;
+  pendingNames.delete(url);
+  await revokeOffscreenBlob(url);
+}
+
 function waitForDownload(j, f, downloadId) {
   return new Promise((resolve) => {
     let settled = false;
@@ -687,7 +838,8 @@ async function refreshJobSession(j) {
 
 /**
  * Chrome 会按服务器返回的 Content-Type 强制改写扩展名（例如 .apkg → .zip）。
- * 正常情况下 DNR 规则已经中和了 MIME；若仍然被改写，这里用页面直存兜底重新保存。
+ * 若真的发生：用 Blob 中继按「原完整路径」重新保存，成功后删除错误副本。
+ * 注意：不再用页面 <a download>，它只能给文件名、不能带子目录，会落到下载根目录。
  */
 async function fixExtensionIfNeeded(j, f, item) {
   const intended = f.savedAs || filenameFor(j.dirName, f, !!f.usedFlat);
@@ -700,47 +852,51 @@ async function fixExtensionIfNeeded(j, f, item) {
     return;
   }
 
+  if (f.extensionFixTried) {
+    jobLog(
+      j,
+      'warn',
+      `扩展名仍被改写：${basename(item.filename)}（应为 ${basename(intended)}），已尝试过 Blob 修正，保留当前文件。`
+    );
+    return;
+  }
+  f.extensionFixTried = true;
+
   jobLog(
     j,
     'warn',
-    `Chrome 按 MIME 改写了扩展名：${basename(item.filename)}（应为 ${basename(intended)}），正在用页面直存重新保存…`
+    `Chrome 按 MIME 改写了扩展名：${basename(item.filename)}（应为 ${basename(intended)}），正在用 Blob 方式保存到原目录…`
   );
 
-  const name = safeBaseName(intended);
-  let resp = null;
+  let newId;
   try {
-    resp = await withTimeout(
-      chrome.tabs.sendMessage(j.tabId, {
-        type: 'WBDA2_SAVE_BLOB',
-        base: j.base,
-        token: j.token,
-        path: f.path,
-        filename: name,
-      }),
-      600000,
-      '页面直存'
-    );
+    newId = await startBlobDownload(j, f, intended, 'extension-fix');
   } catch (e) {
-    resp = { ok: false, error: String((e && e.message) || e) };
-  }
-
-  if (!resp || !resp.ok) {
-    jobLog(j, 'error', `页面直存失败，文件仍是 ${basename(item.filename)}：${(resp && resp.error) || '未知错误'}`);
+    jobLog(j, 'error', `Blob 方式保存失败，文件仍是 ${basename(item.filename)}：${String((e && e.message) || e)}`);
     return;
   }
 
-  f.extensionFixed = true;
-  f.savedAsReal = resp.filename || name;
-  jobLog(j, 'info', `已重新保存为 ${f.savedAsReal}（位于下载目录根目录）`);
+  const res = await waitForDownload(j, f, newId);
+  await revokeFileBlob(f);
 
-  if (resp.url) await eraseByUrl(resp.url);
+  if (!res || res.state !== 'complete') {
+    jobLog(j, 'error', `Blob 方式保存失败，文件仍是 ${basename(item.filename)}：${(res && res.error) || '未知错误'}`);
+    return;
+  }
+
+  const goodName = (res.item && res.item.filename) || intended;
+  f.extensionFixed = true;
+  f.savedAsReal = goodName;
+  jobLog(j, 'info', `已重新保存为 ${basename(goodName)}（与原文件同目录）`);
+
+  if (res.item && res.item.id != null) await eraseDownloadRecord(res.item.id);
 
   if (item && item.id != null) {
     try {
       await chrome.downloads.removeFile(item.id);
       jobLog(j, 'info', `已删除扩展名错误的副本 ${basename(item.filename)}`);
     } catch (e) {
-      jobLog(j, 'warn', `扩展名错误的副本未能自动删除：${basename(item.filename)}`);
+      jobLog(j, 'warn', `扩展名错误的副本未能自动删除：${basename(item.filename)}。请手动删除它。`);
     }
   }
 }
@@ -762,25 +918,54 @@ async function downloadOne(j, f) {
   );
 
   let filename = f.savedAs || filenameFor(j.dirName, f, false);
-  let id;
+  const preferBlob = shouldPreferBlobDownload(f);
+  let id = null;
+  let lastError = null;
+
+  const tryStart = async (name, useBlob) => {
+    if (useBlob) return await startBlobDownload(j, f, name, 'prefer-blob');
+    return await startChromeDownload(j, f, name);
+  };
+
   try {
-    id = await startChromeDownload(j, f, filename);
+    try {
+      id = await tryStart(filename, preferBlob);
+    } catch (e) {
+      if (j.cancelRequested) return;
+      const msg = String((e && e.message) || e);
+      jobLog(j, 'warn', `[${f.index + 1}/${j.totalFiles}] 启动下载失败：${msg}`);
+      if (!preferBlob) throw e;
+      jobLog(j, 'warn', 'Blob 方式启动失败，回退普通下载；若扩展名被改写会自动尝试修正。');
+      id = await tryStart(filename, false);
+    }
     f.savedAs = filename;
   } catch (e) {
+    if (j.cancelRequested) return;
+    lastError = e;
     const msg = String((e && e.message) || e);
     jobLog(j, 'warn', `[${f.index + 1}/${j.totalFiles}] 启动下载失败：${msg}`);
     if (!f.usedFlat && /filename|path|invalid|too long|FILE_/i.test(msg)) {
       f.usedFlat = true;
       filename = filenameFor(j.dirName, f, true);
       try {
-        id = await startChromeDownload(j, f, filename);
+        try {
+          id = await tryStart(filename, preferBlob);
+        } catch (e2) {
+          if (!preferBlob) throw e2;
+          jobLog(j, 'warn', `[${f.index + 1}/${j.totalFiles}] 短路径 Blob 失败，回退普通下载`);
+          id = await tryStart(filename, false);
+        }
         f.savedAs = filename;
-      } catch (e2) {
-        return failFile(j, f, String((e2 && e2.message) || e2));
+      } catch (e3) {
+        return failFile(j, f, String((e3 && e3.message) || e3));
       }
     } else {
       return failFile(j, f, msg);
     }
+  }
+
+  if (id == null) {
+    return failFile(j, f, String((lastError && lastError.message) || lastError || '启动下载失败'));
   }
 
   f.downloadId = id;
@@ -789,6 +974,7 @@ async function downloadOne(j, f) {
   schedulePersist(j, true);
 
   const res = await waitForDownload(j, f, id);
+  await revokeFileBlob(f);
   f.downloadId = null;
   return handleDownloadResult(j, f, res);
 }
@@ -880,6 +1066,7 @@ async function adoptDownload(j, f) {
     return downloadOne(j, f);
   }
   const res = await waitForDownload(j, f, f.downloadId);
+  await revokeFileBlob(f);
   f.downloadId = null;
   return handleDownloadResult(j, f, res);
 }
@@ -912,7 +1099,6 @@ async function runEachJob(j, resume) {
     j.totalBytes || j.files.reduce((s, f) => s + (Number.isFinite(f.size) ? f.size : 0), 0);
   samples = [];
 
-  await ensureMimeRule();
   await setDownloadUiDisabled(true);
 
   const adopted = [];
@@ -1044,7 +1230,6 @@ async function startZipJob(j) {
   scheduleBroadcast(j);
   schedulePersist(j, true);
 
-  await ensureMimeRule();
   await setDownloadUiDisabled(true);
 
   const resp = await withTimeout(
@@ -1200,6 +1385,7 @@ function finishZipJob(j, ev) {
   scheduleBroadcast(j);
   clearAlarm();
   setDownloadUiDisabled(false);
+  scheduleCloseOffscreen();
 }
 
 /* ------------------------------------------------------------
@@ -1261,6 +1447,7 @@ function finalizeJob(j) {
   scheduleBroadcast(j);
   clearAlarm();
   setDownloadUiDisabled(false);
+  scheduleCloseOffscreen();
 }
 
 /* ------------------------------------------------------------
@@ -1284,6 +1471,9 @@ function normalizeFiles(list) {
       attempts: 0,
       usedFlat: false,
       authRetried: false,
+      blobUrl: null,
+      extensionFixTried: false,
+      extensionFixed: false,
     }))
     .filter((f) => f.path && f.rel)
     .map((f, i) => Object.assign(f, { index: i }));
@@ -1301,6 +1491,7 @@ async function startJob(payload) {
   }
 
   await ensureSettings();
+  cancelCloseOffscreen();
 
   const files = normalizeFiles(payload.files);
   if (files.length === 0) {
@@ -1626,6 +1817,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .then(sendResponse)
       .catch((e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
     return true;
+  }
+
+  if (msg.type === 'WBDA2_BLOB_PROGRESS') {
+    const t = blobTransfers.get(msg.requestId);
+    if (t && t.j === job && t.f) {
+      const received = Number(msg.received) || 0;
+      const total = Number(msg.total) || 0;
+      if (received > (t.f.bytes || 0)) t.f.bytes = received;
+      if (total > 0 && !t.f.size) t.f.size = total;
+      scheduleProgress(t.j);
+    }
+    sendResponse({ ok: true });
+    return false;
   }
 
   if (msg.type === 'WBDA2_JOB_EVENT') {

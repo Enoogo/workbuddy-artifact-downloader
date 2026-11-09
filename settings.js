@@ -1,5 +1,5 @@
 /* ============================================================
- * WorkBuddy 产物下载器 — 共享设置与格式化 (settings.js) v2.1
+ * WorkBuddy 产物下载器 — 共享设置与格式化 (settings.js) v2.2
  *
  * 被 background（importScripts）、popup、options、logs 共同使用。
  * 设置存在 chrome.storage.local，改动后所有页面实时生效。
@@ -16,7 +16,7 @@
     etaMetric: 'bytes', // 剩余时间估算口径：bytes | files
     hideDownloadUi: true, // 隐藏下载气泡与下载动画
     clearDownloadHistory: true, // 下载完成后清除本扩展产生的下载记录
-    fixFileExtension: true, // 扩展名被 Chrome 按 MIME 改写时自动用页面直存修正
+    fixFileExtension: true, // 其他类型被 Chrome 按 MIME 改写时自动用 Blob 中继修正
   });
 
   function clampConcurrency(v) {
